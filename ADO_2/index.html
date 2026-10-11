@@ -1,0 +1,496 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Leis de Newton: simulação</title>
+<style>
+  :root {
+    --fundo: #f6f7f9;
+    --painel: #ffffff;
+    --texto: #1d2330;
+    --suave: #667085;
+    --borda: #d9dde3;
+    --azul: #1f6fd1;
+    --laranja: #e07b16;
+    --vermelho: #d33a3a;
+    --cinza: #8a919c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--fundo);
+    color: var(--texto);
+  }
+  header { padding: 16px 20px 4px; }
+  header h1 { margin: 0; font-size: 1.3rem; }
+  header p { margin: 4px 0 0; color: var(--suave); font-size: 0.9rem; }
+  main {
+    display: grid;
+    grid-template-columns: 330px 1fr;
+    gap: 16px;
+    padding: 16px 20px 24px;
+  }
+  @media (max-width: 800px) { main { grid-template-columns: 1fr; padding: 12px 16px; } }
+  .caixa {
+    background: var(--painel);
+    border: 1px solid var(--borda);
+    border-radius: 10px;
+    padding: 14px;
+  }
+  .caixa h2 { margin: 0 0 8px; font-size: 0.95rem; }
+  .grupo { margin-bottom: 14px; }
+  label.opcao { display: block; padding: 3px 0; cursor: pointer; font-size: 0.93rem; }
+  .slider { margin: 10px 0; }
+  .slider .rotulo { display: flex; justify-content: space-between; font-size: 0.88rem; }
+  .slider input { width: 100%; }
+  #resultado {
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 0.9rem;
+    white-space: pre-wrap;
+    background: #f1f3f6;
+    border-radius: 8px;
+    padding: 10px;
+    overflow-x: auto;
+  }
+  #grafico-caixa { display: flex; flex-direction: column; min-width: 0; }
+  #titulo-grafico { margin: 0 0 8px; font-size: 1rem; }
+  canvas { width: 100%; height: 480px; display: block; }
+  @media (max-width: 800px) { canvas { height: 360px; } }
+  .oculto { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Leis de Newton e Aplicações: simulação interativa</h1>
+  <p>Mecânica e Física Moderna. Escolha o sistema e mova os controles: o gráfico atualiza na hora.</p>
+</header>
+
+<main>
+  <section class="caixa">
+    <div class="grupo">
+      <h2>Sistema</h2>
+      <label class="opcao"><input type="radio" name="sistema" value="1" checked> 1. Plano inclinado</label>
+      <label class="opcao"><input type="radio" name="sistema" value="2"> 2. Força centrípeta</label>
+      <label class="opcao"><input type="radio" name="sistema" value="3"> 3. Força de arrasto</label>
+    </div>
+
+    <div class="grupo oculto" id="modo2">
+      <h2>Modo</h2>
+      <label class="opcao"><input type="radio" name="modo2" value="fio" checked> Massa presa a fio</label>
+      <label class="opcao"><input type="radio" name="modo2" value="carro"> Carro em curva plana</label>
+    </div>
+
+    <div class="grupo oculto" id="modo3">
+      <h2>Tipo de arrasto</h2>
+      <label class="opcao"><input type="radio" name="modo3" value="linear" checked> Linear (−b·v)</label>
+      <label class="opcao"><input type="radio" name="modo3" value="quad"> Quadrático (−c·v|v|)</label>
+    </div>
+
+    <div class="grupo" id="sliders"></div>
+
+    <h2>Resultados</h2>
+    <div id="resultado"></div>
+  </section>
+
+  <section class="caixa" id="grafico-caixa">
+    <h2 id="titulo-grafico"></h2>
+    <canvas id="tela"></canvas>
+  </section>
+</main>
+
+<script>
+/*
+  Nenhuma integração numérica é usada. Todas as grandezas vêm de fórmulas
+  fechadas, avaliadas diretamente sobre um vetor de tempo t (equivalente
+  ao np.linspace do Python).
+*/
+const g = 9.81; // aceleração da gravidade (m/s²)
+
+function linspace(a, b, n) {
+  const v = [];
+  for (let i = 0; i < n; i++) v.push(a + (b - a) * i / (n - 1));
+  return v;
+}
+
+// ---------------------------------------------------------------------------
+// SISTEMA 1: PLANO INCLINADO COM ATRITO E TRAÇÃO
+// ---------------------------------------------------------------------------
+function planoInclinado(m1, m2, thetaGraus, mu, t) {
+  /*
+    2ª Lei de Newton (sentido positivo: m2 descendo, m1 subindo o plano):
+      m2:  m2*g - T = m2*a
+      m1:  T - m1*g*sen(θ) - Fat = m1*a
+    Somando, a tração se cancela:  (m1 + m2)*a = m2*g - m1*g*sen(θ) - Fat
+
+    Normal (equilíbrio perpendicular ao plano): N = m1*g*cos(θ)
+    Força motriz: Fmotriz = m2*g - m1*g*sen(θ)
+    Se |Fmotriz| <= μs*N, o atrito estático segura o sistema (a = 0).
+    Senão, o atrito cinético μk*N age contra o movimento.
+    Aqui usamos μs = μk = μ, como sugerido no enunciado.
+  */
+  const theta = thetaGraus * Math.PI / 180;
+  const N = m1 * g * Math.cos(theta);
+  const Fmotriz = m2 * g - m1 * g * Math.sin(theta);
+
+  let a, estado;
+  if (Math.abs(Fmotriz) <= mu * N) {
+    a = 0;
+    estado = "EQUILÍBRIO ESTÁTICO";
+  } else {
+    a = (Fmotriz - mu * N * Math.sign(Fmotriz)) / (m1 + m2);
+    estado = "MOVIMENTO";
+  }
+
+  // Tração, da 2ª Lei aplicada só em m2: m2*g - T = m2*a
+  const T = m2 * (g - a);
+
+  // a é constante, então valem as equações do MRUV (x0 = 0, v0 = 0):
+  //   x(t) = x0 + v0*t + a*t²/2      v(t) = v0 + a*t
+  const x = t.map(ti => 0.5 * a * ti * ti);
+  const v = t.map(ti => a * ti);
+  return { x, v, a, T, estado };
+}
+
+// ---------------------------------------------------------------------------
+// SISTEMA 2: FORÇA CENTRÍPETA (MCU)
+// ---------------------------------------------------------------------------
+function centripeta(R, v, m, t) {
+  /*
+    Movimento Circular Uniforme:
+      ω = v / R
+      x(t) = R*cos(ωt),  y(t) = R*sen(ωt)
+    2ª Lei de Newton na direção radial:
+      Fc = m*v²/R = m*ω²*R
+  */
+  const omega = v / R;
+  const x = t.map(ti => R * Math.cos(omega * ti));
+  const y = t.map(ti => R * Math.sin(omega * ti));
+  const Fc = m * v * v / R;
+  return { x, y, omega, Fc };
+}
+
+function velocidadeMaxCurva(mu, R) {
+  /*
+    Carro em curva plana: o atrito estático fornece a força centrípeta.
+      m*v²/R <= μ*m*g   =>   v_max = sqrt(μ*g*R)   (a massa se cancela)
+  */
+  return Math.sqrt(mu * g * R);
+}
+
+// ---------------------------------------------------------------------------
+// SISTEMA 3: FORÇA DE ARRASTO
+// ---------------------------------------------------------------------------
+function arrastoLinear(m, b, t) {
+  /*
+    Farrasto = -b*v.  2ª Lei: m*dv/dt = m*g - b*v (solução já conhecida):
+      v_terminal = m*g/b      τ = m/b
+      v(t) = v_terminal*(1 - e^(-t/τ))
+    Tempo para 95% de vt: 1 - e^(-t/τ) = 0.95  =>  t = -τ*ln(0.05) ≈ 3τ
+  */
+  const vt = m * g / b;
+  const tau = m / b;
+  const v = t.map(ti => vt * (1 - Math.exp(-ti / tau)));
+  const t95 = -tau * Math.log(0.05);
+  return { v, vt, t95 };
+}
+
+function arrastoQuadratico(m, c, t) {
+  /*
+    Farrasto = -c*v*|v|.  2ª Lei: m*dv/dt = m*g - c*v² (solução já conhecida):
+      v_terminal = sqrt(m*g/c)
+      v(t) = v_terminal*tanh(g*t/v_terminal)
+    Tempo para 95% de vt: tanh(g*t/vt) = 0.95  =>  t = (vt/g)*atanh(0.95)
+  */
+  const vt = Math.sqrt(m * g / c);
+  const v = t.map(ti => vt * Math.tanh(g * ti / vt));
+  const t95 = (vt / g) * Math.atanh(0.95);
+  return { v, vt, t95 };
+}
+
+// ---------------------------------------------------------------------------
+// CONTROLES (sliders de cada sistema)
+// ---------------------------------------------------------------------------
+const definicoes = {
+  1: [
+    { id: "m1", nome: "m1 (kg)", min: 0.5, max: 20, passo: 0.1, valor: 5 },
+    { id: "m2", nome: "m2 (kg)", min: 0.5, max: 20, passo: 0.1, valor: 4 },
+    { id: "theta", nome: "θ (graus)", min: 0, max: 80, passo: 1, valor: 30 },
+    { id: "mu", nome: "μ (μs = μk)", min: 0, max: 1, passo: 0.01, valor: 0.2 },
+  ],
+  2: [
+    { id: "R", nome: "R (m)", min: 0.5, max: 20, passo: 0.1, valor: 5 },
+    { id: "v", nome: "v (m/s)", min: 0.5, max: 30, passo: 0.1, valor: 10 },
+    { id: "m", nome: "m (kg)", min: 0.1, max: 1500, passo: 0.1, valor: 2 },
+    { id: "muCarro", nome: "μ pneu/pista", min: 0.05, max: 1.2, passo: 0.01, valor: 0.7, so: "carro" },
+  ],
+  3: [
+    { id: "mq", nome: "m (kg)", min: 0.1, max: 100, passo: 0.1, valor: 5 },
+    { id: "k", nome: "coef. b ou c", min: 0.05, max: 20, passo: 0.05, valor: 1 },
+    { id: "tmax", nome: "t máx (s)", min: 2, max: 60, passo: 1, valor: 20 },
+  ],
+};
+
+const valores = {};
+const caixaSliders = document.getElementById("sliders");
+
+for (const sis in definicoes) {
+  for (const d of definicoes[sis]) {
+    valores[d.id] = d.valor;
+    const div = document.createElement("div");
+    div.className = "slider";
+    div.dataset.sistema = sis;
+    if (d.so) div.dataset.so = d.so;
+    div.innerHTML =
+      `<div class="rotulo"><span>${d.nome}</span><b id="val-${d.id}">${d.valor}</b></div>` +
+      `<input type="range" min="${d.min}" max="${d.max}" step="${d.passo}" value="${d.valor}">`;
+    div.querySelector("input").addEventListener("input", e => {
+      valores[d.id] = parseFloat(e.target.value);
+      document.getElementById("val-" + d.id).textContent = e.target.value;
+      atualizar();
+    });
+    caixaSliders.appendChild(div);
+  }
+}
+
+function escolhido(nome) {
+  return document.querySelector(`input[name="${nome}"]:checked`).value;
+}
+
+document.querySelectorAll('input[type="radio"]').forEach(r =>
+  r.addEventListener("change", atualizar));
+
+// ---------------------------------------------------------------------------
+// DESENHO DO GRÁFICO (canvas)
+// ---------------------------------------------------------------------------
+const tela = document.getElementById("tela");
+const ctx = tela.getContext("2d");
+let L, A; // largura e altura úteis do canvas
+
+function prepararTela() {
+  const r = window.devicePixelRatio || 1;
+  L = tela.clientWidth;
+  A = tela.clientHeight;
+  tela.width = L * r;
+  tela.height = A * r;
+  ctx.setTransform(r, 0, 0, r, 0, 0);
+  ctx.clearRect(0, 0, L, A);
+}
+
+function arredondarPasso(intervalo) {
+  const bruto = intervalo / 6;
+  const pot = Math.pow(10, Math.floor(Math.log10(bruto)));
+  const n = bruto / pot;
+  return (n < 1.5 ? 1 : n < 3 ? 2 : n < 7 ? 5 : 10) * pot;
+}
+
+// Desenha eixos, grade e as séries. Devolve a função que converte (x, y) em pixels.
+function desenharEixos(xmin, xmax, ymin, ymax, rotX, rotY, mesmaEscala) {
+  const m = { esq: 56, dir: 16, cima: 12, baixo: 42 };
+  let w = L - m.esq - m.dir, h = A - m.cima - m.baixo;
+  let x0 = m.esq, y0 = m.cima;
+  if (mesmaEscala) { // mesma escala em x e y, para o círculo não virar elipse
+    const lado = Math.min(w, h);
+    x0 += (w - lado) / 2; y0 += (h - lado) / 2;
+    w = h = lado;
+  }
+  const px = x => x0 + (x - xmin) / (xmax - xmin) * w;
+  const py = y => y0 + h - (y - ymin) / (ymax - ymin) * h;
+
+  ctx.font = "12px system-ui, sans-serif";
+  ctx.lineWidth = 1;
+  const px_ = arredondarPasso(xmax - xmin), py_ = arredondarPasso(ymax - ymin);
+
+  ctx.fillStyle = "#667085";
+  ctx.textAlign = "center";
+  for (let x = Math.ceil(xmin / px_) * px_; x <= xmax + 1e-9; x += px_) {
+    ctx.strokeStyle = "#eceef2";
+    ctx.beginPath(); ctx.moveTo(px(x), y0); ctx.lineTo(px(x), y0 + h); ctx.stroke();
+    ctx.fillText(+x.toFixed(6), px(x), y0 + h + 16);
+  }
+  ctx.textAlign = "right";
+  for (let y = Math.ceil(ymin / py_) * py_; y <= ymax + 1e-9; y += py_) {
+    ctx.strokeStyle = "#eceef2";
+    ctx.beginPath(); ctx.moveTo(x0, py(y)); ctx.lineTo(x0 + w, py(y)); ctx.stroke();
+    ctx.fillText(+y.toFixed(6), x0 - 6, py(y) + 4);
+  }
+  ctx.strokeStyle = "#b8bec8";
+  ctx.strokeRect(x0, y0, w, h);
+
+  ctx.fillStyle = "#1d2330";
+  ctx.textAlign = "center";
+  ctx.fillText(rotX, x0 + w / 2, y0 + h + 34);
+  ctx.save();
+  ctx.translate(14, y0 + h / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillText(rotY, 0, 0);
+  ctx.restore();
+
+  return { px, py, x0, y0, w, h };
+}
+
+function linha(px, py, xs, ys, cor, larg = 2, tracejado = []) {
+  ctx.save();
+  ctx.strokeStyle = cor; ctx.lineWidth = larg; ctx.setLineDash(tracejado);
+  ctx.beginPath();
+  xs.forEach((x, i) => i ? ctx.lineTo(px(x), py(ys[i])) : ctx.moveTo(px(x), py(ys[i])));
+  ctx.stroke();
+  ctx.restore();
+}
+
+function legenda(eixo, itens, canto = "esq") {
+  ctx.font = "12px system-ui, sans-serif";
+  const largura = Math.max(...itens.map(i => ctx.measureText(i.texto).width)) + 40;
+  const x = canto === "esq" ? eixo.x0 + 10 : eixo.x0 + eixo.w - largura - 10;
+  const y = canto === "esq" ? eixo.y0 + 10 : eixo.y0 + eixo.h - itens.length * 20 - 14;
+  ctx.fillStyle = "rgba(255,255,255,0.9)";
+  ctx.fillRect(x, y, largura, itens.length * 20 + 6);
+  itens.forEach((it, i) => {
+    const yy = y + 14 + i * 20;
+    ctx.save();
+    ctx.strokeStyle = it.cor; ctx.lineWidth = 2; ctx.setLineDash(it.tracejado || []);
+    ctx.beginPath(); ctx.moveTo(x + 8, yy); ctx.lineTo(x + 30, yy); ctx.stroke();
+    ctx.restore();
+    ctx.fillStyle = "#1d2330"; ctx.textAlign = "left";
+    ctx.fillText(it.texto, x + 36, yy + 4);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// CADA SISTEMA NA TELA
+// ---------------------------------------------------------------------------
+const titulo = document.getElementById("titulo-grafico");
+const resultado = document.getElementById("resultado");
+let animacao = null;
+
+function desenharPlano() {
+  const t = linspace(0, 5, 300);
+  const r = planoInclinado(valores.m1, valores.m2, valores.theta, valores.mu, t);
+
+  titulo.textContent = "Plano inclinado com atrito e tração (MRUV)";
+  const todos = r.x.concat(r.v, [0]);
+  let ymin = Math.min(...todos), ymax = Math.max(...todos);
+  if (ymax - ymin < 1e-6) { ymin = -1; ymax = 1; }
+  const folga = (ymax - ymin) * 0.08;
+
+  prepararTela();
+  const e = desenharEixos(0, 5, ymin - folga, ymax + folga, "tempo (s)", "x (m)  /  v (m/s)");
+  linha(e.px, e.py, t, r.x, "#1f6fd1");
+  linha(e.px, e.py, t, r.v, "#e07b16");
+  legenda(e, [
+    { texto: "x(t)  posição [m]", cor: "#1f6fd1" },
+    { texto: "v(t)  velocidade [m/s]", cor: "#e07b16" },
+  ]);
+
+  const sentido = r.a > 0 ? "(m2 desce)" : r.a < 0 ? "(m2 sobe)" : "";
+  resultado.textContent =
+    `Estado: ${r.estado}\n` +
+    `Aceleração a = ${r.a.toFixed(3)} m/s² ${sentido}\n` +
+    `Tração    T = ${r.T.toFixed(2)} N`;
+}
+
+function desenharCentripeta() {
+  const { R, v, m, muCarro } = valores;
+  const omega = v / R;
+  const t = linspace(0, 2 * Math.PI / omega, 300);
+  const r = centripeta(R, v, m, t);
+  const carro = escolhido("modo2") === "carro";
+
+  titulo.textContent = carro
+    ? "Carro em curva plana: o atrito fornece a força centrípeta"
+    : "Força centrípeta: massa presa a um fio (MCU)";
+
+  let texto = `Velocidade angular ω = ${r.omega.toFixed(3)} rad/s\n` +
+              `Força centrípeta Fc = ${r.Fc.toFixed(2)} N`;
+  if (carro) {
+    const vmax = velocidadeMaxCurva(muCarro, R);
+    texto += `\nv máx = √(μgR) = ${vmax.toFixed(2)} m/s\n` +
+             `Situação: ${v <= vmax ? "OK, faz a curva" : "DERRAPA!"}`;
+  }
+  resultado.textContent = texto;
+
+  // Animação: a cada quadro a posição vem direto de x(t) = R cos(ωt), y(t) = R sen(ωt)
+  const lim = R * 1.4;
+  const inicio = performance.now();
+  function quadro(agora) {
+    const ti = (agora - inicio) / 1000;
+    prepararTela();
+    const e = desenharEixos(-lim, lim, -lim, lim, "x (m)", "y (m)", true);
+    linha(e.px, e.py, r.x, r.y, "#1f6fd1");
+    const xm = R * Math.cos(omega * ti), ym = R * Math.sin(omega * ti);
+    linha(e.px, e.py, [0, xm], [0, ym], "#8a919c", 1);
+    ctx.fillStyle = "#1d2330";
+    ctx.fillRect(e.px(0) - 3, e.py(0) - 3, 6, 6);
+    ctx.fillStyle = "#d33a3a";
+    ctx.beginPath(); ctx.arc(e.px(xm), e.py(ym), 9, 0, 2 * Math.PI); ctx.fill();
+    animacao = requestAnimationFrame(quadro);
+  }
+  animacao = requestAnimationFrame(quadro);
+}
+
+function desenharArrasto() {
+  const { mq, k, tmax } = valores;
+  const t = linspace(0, tmax, 400);
+  const linear = escolhido("modo3") === "linear";
+  const r = linear ? arrastoLinear(mq, k, t) : arrastoQuadratico(mq, k, t);
+  const nome = linear ? "linear" : "quadrático";
+
+  // Queda livre (sem arrasto): v(t) = g*t
+  const vLivre = t.map(ti => g * ti);
+
+  titulo.textContent = `Queda com arrasto ${nome} x queda livre`;
+  const ymax = Math.max(r.vt * 1.6, 1);
+
+  prepararTela();
+  const e = desenharEixos(0, tmax, 0, ymax, "tempo (s)", "velocidade (m/s)");
+
+  // Área entre as curvas: mostra que a diferença cresce com o tempo
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(e.x0, e.y0, e.w, e.h);
+  ctx.clip();
+  ctx.fillStyle = "rgba(224,123,22,0.13)";
+  ctx.beginPath();
+  t.forEach((ti, i) => i ? ctx.lineTo(e.px(ti), e.py(vLivre[i])) : ctx.moveTo(e.px(ti), e.py(vLivre[i])));
+  for (let i = t.length - 1; i >= 0; i--) ctx.lineTo(e.px(t[i]), e.py(r.v[i]));
+  ctx.fill();
+  linha(e.px, e.py, t, vLivre, "#8a919c", 1.5, [6, 4]);
+  linha(e.px, e.py, [0, tmax], [r.vt, r.vt], "#d33a3a", 1.5, [2, 3]);
+  linha(e.px, e.py, t, r.v, "#1f6fd1");
+  ctx.restore();
+
+  legenda(e, [
+    { texto: `com arrasto ${nome}`, cor: "#1f6fd1" },
+    { texto: "queda livre (v = g·t)", cor: "#8a919c", tracejado: [6, 4] },
+    { texto: `v terminal = ${r.vt.toFixed(2)} m/s`, cor: "#d33a3a", tracejado: [2, 3] },
+  ], "dir");
+
+  resultado.textContent =
+    `v terminal (fórmula) = ${r.vt.toFixed(2)} m/s\n` +
+    `Tempo até 95% de vt = ${r.t95.toFixed(2)} s`;
+}
+
+function atualizar() {
+  if (animacao) { cancelAnimationFrame(animacao); animacao = null; }
+  const sis = escolhido("sistema");
+  const modo = escolhido("modo2");
+
+  document.getElementById("modo2").classList.toggle("oculto", sis !== "2");
+  document.getElementById("modo3").classList.toggle("oculto", sis !== "3");
+  document.querySelectorAll(".slider").forEach(div => {
+    let visivel = div.dataset.sistema === sis;
+    if (div.dataset.so === "carro" && modo !== "carro") visivel = false;
+    div.classList.toggle("oculto", !visivel);
+  });
+
+  if (sis === "1") desenharPlano();
+  else if (sis === "2") desenharCentripeta();
+  else desenharArrasto();
+}
+
+window.addEventListener("resize", atualizar);
+atualizar();
+</script>
+</body>
+</html>
